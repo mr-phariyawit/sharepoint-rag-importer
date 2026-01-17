@@ -1,0 +1,275 @@
+"""Connection management API routes"""
+
+from fastapi import APIRouter, HTTPException, Depends, Request, Query
+from pydantic import BaseModel, Field
+from typing import Optional, List
+import logging
+
+from app.sharepoint.client import SharePointClient
+from app.security.encryption import EncryptionService
+from app.auth.middleware import require_auth, User
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+class CreateConnectionRequest(BaseModel):
+    """Request to create a new SharePoint connection"""
+    name: str = Field(..., description="Connection name")
+    tenant_id: str = Field(..., description="Azure AD Tenant ID")
+    client_id: str = Field(..., description="App Registration Client ID")
+    client_secret: str = Field(..., description="App Registration Client Secret")
+
+
+class ConnectionResponse(BaseModel):
+    """Connection response model"""
+    id: str
+    name: str
+    tenant_id: str
+    client_id: str
+    status: str
+    total_documents: Optional[int] = 0
+    indexed_documents: Optional[int] = 0
+    total_chunks: Optional[int] = 0
+    created_at: str
+
+
+@router.post("", response_model=ConnectionResponse)
+async def create_connection(
+    request: CreateConnectionRequest,
+    req: Request,
+    current_user: User = Depends(require_auth)
+):
+    """
+    Create a new SharePoint connection.
+    
+    Requires Azure AD App Registration with the following permissions:
+    - Files.Read.All
+    - Sites.Read.All
+    """
+    metadata_store = req.app.state.metadata_store
+    
+    # Test connection first
+    client = SharePointClient(
+        tenant_id=request.tenant_id,
+        client_id=request.client_id,
+        client_secret=request.client_secret
+    )
+    
+    try:
+        await client.authenticate()
+        validation = await client.validate_connection()
+        await client.close()
+        
+        if not validation.get("valid"):
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to validate SharePoint connection"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Connection failed: {str(e)}"
+        )
+    
+    
+    # Encrypt client secret
+    from app.security.encryption import EncryptionService
+    encryption = EncryptionService()
+    encrypted_secret = encryption.encrypt(request.client_secret)
+    
+    # Create connection record
+    connection = await metadata_store.create_connection(
+        name=request.name,
+        tenant_id=request.tenant_id,
+        client_id=request.client_id,
+        client_secret=encrypted_secret
+    )
+    
+    # Update status to connected
+    await metadata_store.update_connection_status(
+        connection_id=str(connection["id"]),
+        status="connected"
+    )
+    
+    return ConnectionResponse(
+        id=str(connection["id"]),
+        name=connection["name"],
+        tenant_id=connection["tenant_id"],
+        client_id=connection["client_id"],
+        status="connected",
+        created_at=str(connection["created_at"])
+    )
+
+
+@router.get("", response_model=List[ConnectionResponse])
+async def list_connections(req: Request, current_user: User = Depends(require_auth)):
+    """List all SharePoint connections"""
+    metadata_store = req.app.state.metadata_store
+    connections = await metadata_store.list_connections()
+    
+    return [
+        ConnectionResponse(
+            id=str(c["id"]),
+            name=c["name"],
+            tenant_id=c["tenant_id"],
+            client_id=c["client_id"],
+            status=c["status"],
+            total_documents=c.get("total_documents", 0),
+            indexed_documents=c.get("indexed_documents", 0),
+            total_chunks=c.get("total_chunks", 0),
+            created_at=str(c["created_at"])
+        )
+        for c in connections
+    ]
+
+
+@router.get("/{connection_id}")
+async def get_connection(connection_id: str, req: Request, current_user: User = Depends(require_auth)):
+    """Get connection details"""
+    metadata_store = req.app.state.metadata_store
+    connection = await metadata_store.get_connection(connection_id)
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    return connection
+
+
+@router.delete("/{connection_id}")
+async def delete_connection(connection_id: str, req: Request, current_user: User = Depends(require_auth)):
+    """Delete a connection and all its data"""
+    metadata_store = req.app.state.metadata_store
+    vector_store = req.app.state.vector_store
+    
+    # Delete vectors
+    await vector_store.delete_by_connection(connection_id)
+    
+    # Delete connection and all related data (cascade)
+    await metadata_store.delete_connection(connection_id)
+    
+    return {"status": "deleted", "connection_id": connection_id}
+
+
+@router.get("/{connection_id}/drives")
+async def list_connection_drives(connection_id: str, req: Request, current_user: User = Depends(require_auth)):
+    """List document libraries (drives) for a connection"""
+    metadata_store = req.app.state.metadata_store
+    
+    # Get connection
+    connection = await metadata_store.get_connection(connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    # Decrypt secret
+    encryption = EncryptionService()
+    try:
+        encrypted_secret = connection.get("client_secret_encrypted")
+        if not encrypted_secret:
+             # Legacy fallback or error
+             client_secret = connection.get("client_secret")
+             if not client_secret:
+                 raise ValueError("No client secret found")
+        else:
+             try:
+                 client_secret = encryption.decrypt(encrypted_secret)
+             except Exception:
+                 client_secret = encrypted_secret
+    except Exception as e:
+        logger.error(f"Failed to decrypt secret: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve connection credentials")
+    
+    # Init client
+    client = SharePointClient(
+        tenant_id=connection["tenant_id"],
+        client_id=connection["client_id"],
+        client_secret=client_secret
+    )
+    
+    try:
+        await client.authenticate()
+        drives = await client.list_drives()
+        await client.close()
+        return drives
+    except Exception as e:
+        await client.close()
+        logger.error(f"Failed to list drives: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{connection_id}/browse")
+async def browse_connection_files(
+    connection_id: str,
+    req: Request,
+    drive_id: str = Query(..., description="Drive ID to browse"),
+    folder_id: str = Query("root", description="Folder ID to list (default: root)"),
+    current_user: User = Depends(require_auth)
+):
+    """List files and folders in a SharePoint location"""
+    metadata_store = req.app.state.metadata_store
+    
+    # Get connection
+    connection = await metadata_store.get_connection(connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    # Decrypt secret
+    encryption = EncryptionService()
+    try:
+        encrypted_secret = connection.get("client_secret_encrypted")
+        if not encrypted_secret:
+             client_secret = connection.get("client_secret")
+             if not client_secret:
+                 raise ValueError("No client secret found")
+        else:
+             try:
+                 client_secret = encryption.decrypt(encrypted_secret)
+             except Exception:
+                 client_secret = encrypted_secret
+    except Exception as e:
+        logger.error(f"Failed to decrypt secret: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve connection credentials")
+    
+    # Init client
+    client = SharePointClient(
+        tenant_id=connection["tenant_id"],
+        client_id=connection["client_id"],
+        client_secret=client_secret
+    )
+    
+    try:
+        await client.authenticate()
+        files, folders = await client.list_folder_contents(
+            drive_id=drive_id,
+            folder_id=folder_id
+        )
+        await client.close()
+        
+        return {
+            "folders": [
+                {
+                    "id": f.id,
+                    "name": f.name,
+                    "path": f.path,
+                    "child_count": f.child_count,
+                    "web_url": f.web_url
+                }
+                for f in folders
+            ],
+            "files": [
+                {
+                    "id": f.id,
+                    "name": f.name,
+                    "mime_type": f.mime_type,
+                    "size": f.size_bytes,
+                    "web_url": f.web_url,
+                    "created_at": f.created_at,
+                    "modified_at": f.modified_at
+                }
+                for f in files
+            ]
+        }
+    except Exception as e:
+        await client.close()
+        logger.error(f"Failed to browse folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
