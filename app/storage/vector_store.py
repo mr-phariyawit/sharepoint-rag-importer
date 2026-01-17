@@ -306,20 +306,21 @@ class VectorStore:
                 )
         
         search_filter = Filter(must=filter_conditions) if filter_conditions else None
-        
-        # Search
-        results = await self._client.search(
+
+        # Search using query_points (qdrant-client >= 1.7)
+        from qdrant_client.models import QueryRequest
+        results = await self._client.query_points(
             collection_name=self.collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=top_k,
             query_filter=search_filter,
             score_threshold=min_score,
             with_payload=True
         )
-        
+
         # Convert to results
         search_results = []
-        for hit in results:
+        for hit in results.points:
             payload = hit.payload or {}
             search_results.append(VectorSearchResult(
                 id=str(hit.id),

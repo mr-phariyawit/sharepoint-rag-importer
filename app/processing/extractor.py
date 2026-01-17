@@ -125,41 +125,42 @@ class DocumentExtractor:
     async def extract_pdf(self, content: bytes, filename: str) -> ExtractionResult:
         """Extract text from PDF"""
         doc = fitz.open(stream=content, filetype="pdf")
-        
+
         text_parts = []
         page_texts = {}
-        
-        for page_num in range(len(doc)):
+        page_count = len(doc)  # Store before closing
+
+        for page_num in range(page_count):
             page = doc[page_num]
             page_text = page.get_text("text")
-            
+
             # Try OCR if no text extracted and OCR is enabled
             if not page_text.strip() and self.ocr_enabled:
                 try:
                     page_text = self._ocr_page(page)
                 except Exception as e:
                     logger.warning(f"OCR failed for page {page_num + 1}: {e}")
-            
+
             if page_text.strip():
                 text_parts.append(f"[Page {page_num + 1}]\n{page_text}")
                 page_texts[page_num + 1] = page_text
-        
-        # Extract metadata
+
+        # Extract metadata before closing
         metadata = {
             "title": doc.metadata.get("title"),
             "author": doc.metadata.get("author"),
             "subject": doc.metadata.get("subject"),
             "creator": doc.metadata.get("creator"),
-            "page_count": len(doc),
+            "page_count": page_count,
             "page_texts": page_texts
         }
-        
+
         doc.close()
-        
+
         return ExtractionResult(
             text="\n\n".join(text_parts),
             metadata=metadata,
-            page_count=len(doc)
+            page_count=page_count
         )
     
     def _ocr_page(self, page) -> str:
