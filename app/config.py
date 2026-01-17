@@ -33,9 +33,17 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
     
+    # LLM Provider (anthropic, gemini, openai)
+    LLM_PROVIDER: str = "gemini"  # Default to Gemini
+
     # Anthropic (Generation)
-    ANTHROPIC_API_KEY: str
-    LLM_MODEL: str = "claude-3-5-sonnet-20241022"
+    ANTHROPIC_API_KEY: Optional[str] = None
+
+    # Google Gemini
+    GEMINI_API_KEY: Optional[str] = None
+
+    # LLM Model (auto-detected based on provider if not set)
+    LLM_MODEL: str = "gemini-1.5-flash"
     
     # Processing
     CHUNK_SIZE: int = 512

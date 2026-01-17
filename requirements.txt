@@ -37,6 +37,7 @@ pillow==10.2.0
 # AI/ML
 openai==1.9.0
 anthropic==0.18.0
+google-generativeai==0.8.3
 tiktoken==0.5.2
 
 # Text Processing

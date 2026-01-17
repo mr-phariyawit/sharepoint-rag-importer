@@ -9,7 +9,6 @@ from enum import Enum
 from datetime import datetime
 import json
 import logging
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.processing.embedder import TextEmbedder
@@ -17,6 +16,179 @@ from app.auth.middleware import require_auth, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# =============================================================================
+# LLM Provider Abstraction
+# =============================================================================
+
+async def generate_with_llm(system_prompt: str, user_message: str) -> str:
+    """Generate response using configured LLM provider"""
+    provider = settings.LLM_PROVIDER.lower()
+
+    if provider == "gemini":
+        return await _generate_gemini(system_prompt, user_message)
+    elif provider == "anthropic":
+        return await _generate_anthropic(system_prompt, user_message)
+    elif provider == "openai":
+        return await _generate_openai(system_prompt, user_message)
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+async def _generate_gemini(system_prompt: str, user_message: str) -> str:
+    """Generate with Google Gemini"""
+    import google.generativeai as genai
+
+    if not settings.GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is required for Gemini provider")
+
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+
+    model = genai.GenerativeModel(
+        model_name=settings.LLM_MODEL or "gemini-1.5-flash",
+        system_instruction=system_prompt
+    )
+
+    response = await model.generate_content_async(
+        user_message,
+        generation_config=genai.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=2000,
+        )
+    )
+
+    return response.text
+
+
+async def _generate_anthropic(system_prompt: str, user_message: str) -> str:
+    """Generate with Anthropic Claude"""
+    from anthropic import AsyncAnthropic
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY is required for Anthropic provider")
+
+    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    response = await client.messages.create(
+        model=settings.LLM_MODEL or "claude-3-5-sonnet-20241022",
+        max_tokens=2000,
+        temperature=0.3,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}]
+    )
+
+    return response.content[0].text
+
+
+async def _generate_openai(system_prompt: str, user_message: str) -> str:
+    """Generate with OpenAI GPT"""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+    response = await client.chat.completions.create(
+        model=settings.LLM_MODEL or "gpt-4o-mini",
+        max_tokens=2000,
+        temperature=0.3,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ]
+    )
+
+    return response.choices[0].message.content
+
+
+# =============================================================================
+# Streaming LLM Functions
+# =============================================================================
+
+async def stream_with_llm(system_prompt: str, user_message: str):
+    """Stream response using configured LLM provider"""
+    provider = settings.LLM_PROVIDER.lower()
+
+    if provider == "gemini":
+        async for chunk in _stream_gemini(system_prompt, user_message):
+            yield chunk
+    elif provider == "anthropic":
+        async for chunk in _stream_anthropic(system_prompt, user_message):
+            yield chunk
+    elif provider == "openai":
+        async for chunk in _stream_openai(system_prompt, user_message):
+            yield chunk
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+async def _stream_gemini(system_prompt: str, user_message: str):
+    """Stream with Google Gemini"""
+    import google.generativeai as genai
+
+    if not settings.GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is required for Gemini provider")
+
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+
+    model = genai.GenerativeModel(
+        model_name=settings.LLM_MODEL or "gemini-1.5-flash",
+        system_instruction=system_prompt
+    )
+
+    response = await model.generate_content_async(
+        user_message,
+        generation_config=genai.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=2000,
+        ),
+        stream=True
+    )
+
+    async for chunk in response:
+        if chunk.text:
+            yield chunk.text
+
+
+async def _stream_anthropic(system_prompt: str, user_message: str):
+    """Stream with Anthropic Claude"""
+    from anthropic import AsyncAnthropic
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY is required for Anthropic provider")
+
+    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    async with client.messages.stream(
+        model=settings.LLM_MODEL or "claude-3-5-sonnet-20241022",
+        max_tokens=2000,
+        temperature=0.3,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}]
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
+async def _stream_openai(system_prompt: str, user_message: str):
+    """Stream with OpenAI GPT"""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+    stream = await client.chat.completions.create(
+        model=settings.LLM_MODEL or "gpt-4o-mini",
+        max_tokens=2000,
+        temperature=0.3,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        stream=True
+    )
+
+    async for chunk in stream:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
 
 
 # =============================================================================
@@ -185,11 +357,9 @@ async def rag_query(request: QueryRequest, req: Request, current_user: User = De
     
     context = "\n".join(context_parts)
     
-    # 4. Generate answer with Claude
+    # 4. Generate answer with LLM
     start = time.time()
-    
-    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    
+
     system_prompt = """คุณเป็นผู้ช่วยที่ตอบคำถามโดยใช้ข้อมูลจาก context ที่ให้มา
 
 กฎ:
@@ -206,15 +376,7 @@ async def rag_query(request: QueryRequest, req: Request, current_user: User = De
 
 ตอบโดยอ้างอิง [หมายเลข] ของแหล่งที่มา:"""
 
-    response = await client.messages.create(
-        model=settings.LLM_MODEL,
-        max_tokens=2000,
-        temperature=0.3,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}]
-    )
-    
-    answer = response.content[0].text
+    answer = await generate_with_llm(system_prompt, user_message)
     timing["generation_ms"] = (time.time() - start) * 1000
     timing["total_ms"] = sum(timing.values())
     
@@ -319,24 +481,19 @@ async def rag_query_stream(request: QueryRequest, req: Request, current_user: Us
     async def generate():
         # Send sources first
         yield f"data: {json.dumps({'type': 'sources', 'data': sources})}\n\n"
-        
-        client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        
-        async with client.messages.stream(
-            model=settings.LLM_MODEL,
-            max_tokens=2000,
-            temperature=0.3,
-            system="ตอบคำถามโดยใช้ข้อมูลจาก context อ้างอิงด้วย [หมายเลข]",
-            messages=[{
-                "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion: {request.query}"
-            }]
-        ) as stream:
-            async for text in stream.text_stream:
+
+        system_prompt = "ตอบคำถามโดยใช้ข้อมูลจาก context อ้างอิงด้วย [หมายเลข]"
+        user_message = f"Context:\n{context}\n\nQuestion: {request.query}"
+
+        try:
+            async for text in stream_with_llm(system_prompt, user_message):
                 yield f"data: {json.dumps({'type': 'content', 'text': text})}\n\n"
-        
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    
+
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
