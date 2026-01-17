@@ -33,14 +33,18 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
     
-    # LLM Provider (anthropic, gemini, openai)
+    # LLM Provider (anthropic, gemini, vertex, openai)
     LLM_PROVIDER: str = "gemini"  # Default to Gemini
 
     # Anthropic (Generation)
     ANTHROPIC_API_KEY: Optional[str] = None
 
-    # Google Gemini
+    # Google Gemini (AI Studio)
     GEMINI_API_KEY: Optional[str] = None
+
+    # Google Vertex AI (Enterprise)
+    VERTEX_PROJECT_ID: Optional[str] = None
+    VERTEX_LOCATION: str = "us-central1"
 
     # LLM Model (auto-detected based on provider if not set)
     LLM_MODEL: str = "gemini-1.5-flash"

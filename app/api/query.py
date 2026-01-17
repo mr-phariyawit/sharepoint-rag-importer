@@ -28,6 +28,8 @@ async def generate_with_llm(system_prompt: str, user_message: str) -> str:
 
     if provider == "gemini":
         return await _generate_gemini(system_prompt, user_message)
+    elif provider == "vertex":
+        return await _generate_vertex(system_prompt, user_message)
     elif provider == "anthropic":
         return await _generate_anthropic(system_prompt, user_message)
     elif provider == "openai":
@@ -53,6 +55,35 @@ async def _generate_gemini(system_prompt: str, user_message: str) -> str:
     response = await model.generate_content_async(
         user_message,
         generation_config=genai.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=2000,
+        )
+    )
+
+    return response.text
+
+
+async def _generate_vertex(system_prompt: str, user_message: str) -> str:
+    """Generate with Google Vertex AI"""
+    import vertexai
+    from vertexai.generative_models import GenerativeModel, GenerationConfig
+
+    if not settings.VERTEX_PROJECT_ID:
+        raise ValueError("VERTEX_PROJECT_ID is required for Vertex AI provider")
+
+    vertexai.init(
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION
+    )
+
+    model = GenerativeModel(
+        model_name=settings.LLM_MODEL or "gemini-1.5-flash",
+        system_instruction=system_prompt
+    )
+
+    response = await model.generate_content_async(
+        user_message,
+        generation_config=GenerationConfig(
             temperature=0.3,
             max_output_tokens=2000,
         )
@@ -111,6 +142,9 @@ async def stream_with_llm(system_prompt: str, user_message: str):
     if provider == "gemini":
         async for chunk in _stream_gemini(system_prompt, user_message):
             yield chunk
+    elif provider == "vertex":
+        async for chunk in _stream_vertex(system_prompt, user_message):
+            yield chunk
     elif provider == "anthropic":
         async for chunk in _stream_anthropic(system_prompt, user_message):
             yield chunk
@@ -138,6 +172,38 @@ async def _stream_gemini(system_prompt: str, user_message: str):
     response = await model.generate_content_async(
         user_message,
         generation_config=genai.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=2000,
+        ),
+        stream=True
+    )
+
+    async for chunk in response:
+        if chunk.text:
+            yield chunk.text
+
+
+async def _stream_vertex(system_prompt: str, user_message: str):
+    """Stream with Google Vertex AI"""
+    import vertexai
+    from vertexai.generative_models import GenerativeModel, GenerationConfig
+
+    if not settings.VERTEX_PROJECT_ID:
+        raise ValueError("VERTEX_PROJECT_ID is required for Vertex AI provider")
+
+    vertexai.init(
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION
+    )
+
+    model = GenerativeModel(
+        model_name=settings.LLM_MODEL or "gemini-1.5-flash",
+        system_instruction=system_prompt
+    )
+
+    response = await model.generate_content_async(
+        user_message,
+        generation_config=GenerationConfig(
             temperature=0.3,
             max_output_tokens=2000,
         ),
