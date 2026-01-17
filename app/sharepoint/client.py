@@ -21,6 +21,47 @@ from tenacity import (
 logger = logging.getLogger(__name__)
 
 
+def extract_tenant_from_url(url: str) -> str:
+    """
+    Extract tenant domain from SharePoint URL for Azure AD authentication.
+
+    Azure AD accepts domain names as tenant identifiers, so we can use
+    the tenant's onmicrosoft.com domain directly.
+
+    Examples:
+        - https://contoso.sharepoint.com/sites/HR → contoso.onmicrosoft.com
+        - https://contoso-my.sharepoint.com/personal/user → contoso.onmicrosoft.com
+        - https://apollodemo118.sharepoint.com/sites/admin → apollodemo118.onmicrosoft.com
+
+    Args:
+        url: SharePoint or OneDrive URL
+
+    Returns:
+        Tenant domain in format: {tenant}.onmicrosoft.com
+
+    Raises:
+        ValueError: If URL is not a valid SharePoint URL
+    """
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+
+    if not host:
+        raise ValueError(f"Invalid URL: {url}")
+
+    # Handle: contoso.sharepoint.com or contoso-my.sharepoint.com
+    if '.sharepoint.com' in host:
+        # Extract tenant name (everything before .sharepoint.com)
+        tenant = host.split('.sharepoint.com')[0]
+        # Remove OneDrive suffix (-my)
+        tenant = tenant.replace('-my', '')
+        return f"{tenant}.onmicrosoft.com"
+
+    raise ValueError(
+        f"Invalid SharePoint URL: {url}. "
+        "URL must contain .sharepoint.com domain."
+    )
+
+
 @dataclass
 class SharePointFile:
     """Represents a file from SharePoint/OneDrive"""

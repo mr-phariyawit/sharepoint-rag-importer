@@ -14,16 +14,19 @@ CREATE TABLE connections (
     tenant_id VARCHAR(255) NOT NULL,
     client_id VARCHAR(255) NOT NULL,
     client_secret_encrypted TEXT NOT NULL,
-    
+
+    -- Default folder URL (used for simplified connection creation)
+    default_folder_url TEXT,
+
     -- OAuth tokens (encrypted)
     access_token_encrypted TEXT,
     refresh_token_encrypted TEXT,
     token_expires_at TIMESTAMPTZ,
-    
+
     -- Status
     status VARCHAR(50) DEFAULT 'pending', -- pending, connected, error
     last_error TEXT,
-    
+
     -- Metadata
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -279,3 +282,18 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
+
+-- ============================================================================
+-- MIGRATIONS (for existing databases)
+-- ============================================================================
+
+-- Add default_folder_url column to connections if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'connections' AND column_name = 'default_folder_url'
+    ) THEN
+        ALTER TABLE connections ADD COLUMN default_folder_url TEXT;
+    END IF;
+END $$;

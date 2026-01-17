@@ -750,7 +750,7 @@
         
         const [form, setForm] = useState({
           name: "",
-          tenant_id: "",
+          folder_url: "",
           client_id: "",
           client_secret: "",
         });
@@ -760,7 +760,7 @@
         const handleCreate = async () => {
           if (
             !form.name ||
-            !form.tenant_id ||
+            !form.folder_url ||
             !form.client_id ||
             !form.client_secret
           ) {
@@ -774,7 +774,7 @@
             setShowAdd(false);
             setForm({
               name: "",
-              tenant_id: "",
+              folder_url: "",
               client_id: "",
               client_secret: "",
             });
@@ -925,14 +925,18 @@
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Tenant ID
+                    SharePoint Folder URL
                   </label>
                   <input
                     type="text"
-                    value={form.tenant_id}
-                    onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}
+                    value={form.folder_url}
+                    onChange={(e) => setForm({ ...form, folder_url: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500"
+                    placeholder="https://company.sharepoint.com/sites/MySite/Shared Documents/Folder"
                   />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Paste the URL of any folder in your SharePoint site. The tenant will be auto-detected.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">

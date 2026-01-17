@@ -448,16 +448,17 @@ class MetadataStore:
         name: str,
         tenant_id: str,
         client_id: str,
-        client_secret: str
+        client_secret: str,
+        default_folder_url: str = None
     ) -> Dict[str, Any]:
         """Create a new SharePoint connection"""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
-                INSERT INTO connections (name, tenant_id, client_id, client_secret_encrypted)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id, name, tenant_id, client_id, status, created_at
-            """, name, tenant_id, client_id, client_secret)  # TODO: encrypt
-            
+                INSERT INTO connections (name, tenant_id, client_id, client_secret_encrypted, default_folder_url)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id, name, tenant_id, client_id, status, default_folder_url, created_at
+            """, name, tenant_id, client_id, client_secret, default_folder_url)
+
             return dict(row)
     
     async def get_connection(self, connection_id: str) -> Optional[Dict[str, Any]]:
@@ -465,10 +466,10 @@ class MetadataStore:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT id, name, tenant_id, client_id, client_secret_encrypted,
-                       status, last_error, created_at, updated_at
+                       default_folder_url, status, last_error, created_at, updated_at
                 FROM connections WHERE id = $1
             """, connection_id)
-            
+
             return dict(row) if row else None
     
     async def list_connections(self) -> List[Dict[str, Any]]:

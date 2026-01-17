@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 import logging
 
-from app.sharepoint.client import SharePointClient
+from app.sharepoint.client import SharePointClient, extract_tenant_from_url
 from app.security.encryption import EncryptionService
 from app.auth.middleware import require_auth, User
 
@@ -16,7 +16,7 @@ router = APIRouter()
 class CreateConnectionRequest(BaseModel):
     """Request to create a new SharePoint connection"""
     name: str = Field(..., description="Connection name")
-    tenant_id: str = Field(..., description="Azure AD Tenant ID")
+    folder_url: str = Field(..., description="SharePoint folder URL (tenant extracted automatically)")
     client_id: str = Field(..., description="App Registration Client ID")
     client_secret: str = Field(..., description="App Registration Client Secret")
 
@@ -28,6 +28,7 @@ class ConnectionResponse(BaseModel):
     tenant_id: str
     client_id: str
     status: str
+    default_folder_url: Optional[str] = None
     total_documents: Optional[int] = 0
     indexed_documents: Optional[int] = 0
     total_chunks: Optional[int] = 0
@@ -42,62 +43,82 @@ async def create_connection(
 ):
     """
     Create a new SharePoint connection.
-    
+
+    Provide the SharePoint folder URL and Azure AD app credentials.
+    The tenant is automatically extracted from the SharePoint URL.
+
     Requires Azure AD App Registration with the following permissions:
     - Files.Read.All
     - Sites.Read.All
     """
     metadata_store = req.app.state.metadata_store
-    
-    # Test connection first
+
+    # Extract tenant from SharePoint URL
+    try:
+        tenant_id = extract_tenant_from_url(request.folder_url)
+        logger.info(f"Extracted tenant: {tenant_id} from URL: {request.folder_url}")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    # Test connection with extracted tenant
     client = SharePointClient(
-        tenant_id=request.tenant_id,
+        tenant_id=tenant_id,
         client_id=request.client_id,
         client_secret=request.client_secret
     )
-    
+
     try:
         await client.authenticate()
         validation = await client.validate_connection()
+
+        # Get actual tenant GUID if available from validation
+        actual_tenant_id = validation.get("tenant_id", tenant_id)
+
         await client.close()
-        
+
         if not validation.get("valid"):
             raise HTTPException(
                 status_code=400,
-                detail="Failed to validate SharePoint connection"
+                detail="Failed to validate SharePoint connection. Check your credentials."
             )
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Connection failed: {e}")
         raise HTTPException(
             status_code=400,
             detail=f"Connection failed: {str(e)}"
         )
-    
-    
+
     # Encrypt client secret
-    from app.security.encryption import EncryptionService
     encryption = EncryptionService()
     encrypted_secret = encryption.encrypt(request.client_secret)
-    
-    # Create connection record
+
+    # Create connection record with folder URL
     connection = await metadata_store.create_connection(
         name=request.name,
-        tenant_id=request.tenant_id,
+        tenant_id=actual_tenant_id,
         client_id=request.client_id,
-        client_secret=encrypted_secret
+        client_secret=encrypted_secret,
+        default_folder_url=request.folder_url
     )
-    
+
     # Update status to connected
     await metadata_store.update_connection_status(
         connection_id=str(connection["id"]),
         status="connected"
     )
-    
+
     return ConnectionResponse(
         id=str(connection["id"]),
         name=connection["name"],
         tenant_id=connection["tenant_id"],
         client_id=connection["client_id"],
         status="connected",
+        default_folder_url=request.folder_url,
         created_at=str(connection["created_at"])
     )
 
@@ -107,7 +128,7 @@ async def list_connections(req: Request, current_user: User = Depends(require_au
     """List all SharePoint connections"""
     metadata_store = req.app.state.metadata_store
     connections = await metadata_store.list_connections()
-    
+
     return [
         ConnectionResponse(
             id=str(c["id"]),
@@ -115,6 +136,7 @@ async def list_connections(req: Request, current_user: User = Depends(require_au
             tenant_id=c["tenant_id"],
             client_id=c["client_id"],
             status=c["status"],
+            default_folder_url=c.get("default_folder_url"),
             total_documents=c.get("total_documents", 0),
             indexed_documents=c.get("indexed_documents", 0),
             total_chunks=c.get("total_chunks", 0),
