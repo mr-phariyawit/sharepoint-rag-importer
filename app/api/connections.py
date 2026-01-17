@@ -16,9 +16,10 @@ router = APIRouter()
 class CreateConnectionRequest(BaseModel):
     """Request to create a new SharePoint connection"""
     name: str = Field(..., description="Connection name")
-    folder_url: str = Field(..., description="SharePoint folder URL (tenant extracted automatically)")
+    folder_url: str = Field(..., description="SharePoint folder URL (sharing link or direct URL)")
     client_id: str = Field(..., description="App Registration Client ID")
     client_secret: str = Field(..., description="App Registration Client Secret")
+    tenant_id: Optional[str] = Field(None, description="Azure AD Tenant ID (optional - auto-extracted from URL if not provided)")
 
 
 class ConnectionResponse(BaseModel):
@@ -53,17 +54,21 @@ async def create_connection(
     """
     metadata_store = req.app.state.metadata_store
 
-    # Extract tenant from SharePoint URL
-    try:
-        tenant_id = extract_tenant_from_url(request.folder_url)
-        logger.info(f"Extracted tenant: {tenant_id} from URL: {request.folder_url}")
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+    # Use provided tenant_id or extract from SharePoint URL
+    if request.tenant_id:
+        tenant_id = request.tenant_id
+        logger.info(f"Using provided tenant: {tenant_id}")
+    else:
+        try:
+            tenant_id = extract_tenant_from_url(request.folder_url)
+            logger.info(f"Extracted tenant: {tenant_id} from URL: {request.folder_url}")
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
 
-    # Test connection with extracted tenant
+    # Test connection with tenant
     client = SharePointClient(
         tenant_id=tenant_id,
         client_id=request.client_id,

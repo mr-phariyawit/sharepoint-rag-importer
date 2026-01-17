@@ -124,16 +124,31 @@ async def list_import_jobs(
     current_user: User = Depends(require_auth)
 ):
     """List recent import jobs"""
-    # TODO: Implement in metadata store
-    # For now return empty list or mock
-    # Wait, we need to implement listing in metadata store if we want the dashboard to show jobs
-    # But for now, returning empty list allows dashboard to load without error
-    
-    # Actually, let's just use metadata_store.get_recent_jobs if it existed, but it doesn't.
-    # We'll just return all jobs from SQL if we can, or just empty for now.
-    # The dashboard calls GET /api/import
-    
-    return []
+    metadata_store = req.app.state.metadata_store
+    jobs = await metadata_store.list_import_jobs(
+        connection_id=connection_id,
+        limit=limit
+    )
+
+    return [
+        {
+            "id": str(job["id"]),
+            "connection_id": str(job["connection_id"]),
+            "connection_name": job.get("connection_name", ""),
+            "folder_url": job["folder_url"],
+            "folder_name": job.get("folder_name"),
+            "status": job["status"],
+            "total_files": job.get("total_files_found", 0),
+            "processed_files": job.get("files_processed", 0),
+            "failed_files": job.get("files_failed", 0),
+            "total_chunks": job.get("total_chunks_created", 0),
+            "progress_percent": job.get("progress_percent", 0),
+            "created_at": str(job["created_at"]),
+            "started_at": str(job.get("started_at")) if job.get("started_at") else None,
+            "completed_at": str(job.get("completed_at")) if job.get("completed_at") else None,
+        }
+        for job in jobs
+    ]
 
 
 # =============================================================================
