@@ -51,6 +51,15 @@ The **SharePoint RAG Importer** is a system designed to import files from ShareP
 - **Access Control**: (Future) API Key authentication for the Importer API.
 
 ## 5. Current Gaps & Roadmap
-- [ ] **Encryption**: `client_secret` is currently stored in plain text.
-- [ ] **Metadata Methods**: `list_import_jobs` and cascade `delete_connection` are not implemented.
-- [ ] **Webhooks**: Endpoints exist but implementation requires verification.
+
+### Completed
+- [x] **Encryption**: `client_secret` encrypted with Fernet (SECURITY_KEY)
+- [x] **Metadata Methods**: `list_import_jobs` and cascade `delete_connection` implemented
+- [x] **Webhooks**: Full implementation - validation, renewals, delta processing
+- [x] **Rate Limiting**: Tenacity retry with exponential backoff
+- [x] **Frontend Dashboard**: Connections CRUD, Import Jobs monitoring, SharePoint browser
+
+### Remaining (Phase 3 Search)
+- [ ] **Hybrid Search**: Mode parameter accepted but only semantic implemented
+- [ ] **Keyword Search**: Sparse vectors/BM25 not yet implemented
+- [ ] **Date Range Filters**: Model defined but not connected to query
