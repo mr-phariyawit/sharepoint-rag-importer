@@ -60,6 +60,6 @@ The **SharePoint RAG Importer** is a system designed to import files from ShareP
 - [x] **Frontend Dashboard**: Connections CRUD, Import Jobs monitoring, SharePoint browser
 
 ### Remaining (Phase 3 Search)
-- [ ] **Hybrid Search**: Mode parameter accepted but only semantic implemented
-- [ ] **Keyword Search**: Sparse vectors/BM25 not yet implemented
-- [ ] **Date Range Filters**: Model defined but not connected to query
+- [x] **Hybrid Search**: Implemented using Reciprocal Rank Fusion (RRF)
+- [x] **Keyword Search**: Full-text search using Qdrant text index
+- [x] **Date Range Filters**: Connected to all search modes
