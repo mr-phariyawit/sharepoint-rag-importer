@@ -21,6 +21,7 @@ services:
       - ./frontend:/app/frontend
       - ./workers:/app/workers
       - upload_data:/app/uploads
+      - ~/.config/gcloud:/root/.config/gcloud:ro
     depends_on:
       postgres:
         condition: service_healthy
