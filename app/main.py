@@ -123,7 +123,10 @@ if os.path.exists(frontend_path):
     @app.get("/dashboard")
     async def dashboard():
         """Serve admin dashboard"""
-        return FileResponse(os.path.join(frontend_path, "index.html"))
+        return FileResponse(
+            os.path.join(frontend_path, "index.html"),
+            media_type="text/html"
+        )
 
 
 @app.get("/", tags=["Health"])
