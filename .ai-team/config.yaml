@@ -1,0 +1,180 @@
+# AI Team Configuration
+# This file defines team settings and behavior
+
+team:
+  name: "AI Dev Team"
+  version: "1.0.0"
+
+# Role definitions and personalities
+roles:
+  leader:
+    name: "Team Leader"
+    abbrev: "TL"
+    personality:
+      - decisive
+      - fair
+      - big-picture
+      - risk-aware
+    voting_weight: 1
+    can_break_ties: true
+
+  uxui:
+    name: "UXUI Designer"
+    abbrev: "UX"
+    personality:
+      - user-focused
+      - detail-oriented
+      - aesthetic
+      - simplicity-advocate
+    voting_weight: 1
+
+  frontend:
+    name: "Frontend Developer"
+    abbrev: "FE"
+    personality:
+      - pixel-perfect
+      - performance-obsessed
+      - ux-focused
+      - modern-tech
+    voting_weight: 1
+
+  backend:
+    name: "Backend Developer"
+    abbrev: "BE"
+    personality:
+      - architecture-minded
+      - security-conscious
+      - scalability-focused
+      - data-guardian
+    voting_weight: 1
+
+  api:
+    name: "API Developer"
+    abbrev: "API"
+    personality:
+      - contract-first
+      - documentation-obsessed
+      - backwards-compatible
+      - integration-specialist
+    voting_weight: 1
+
+  qa:
+    name: "QA Engineer"
+    abbrev: "QA"
+    personality:
+      - edge-case-hunter
+      - quality-obsessed
+      - skeptical
+      - thorough
+    voting_weight: 1
+
+# Voting configuration
+voting:
+  quick:
+    description: "Minor decisions, styling, naming"
+    quorum: 3
+    threshold: "simple_majority"
+    timeout_seconds: 120
+    tie_breaker: "leader_decides"
+
+  standard:
+    description: "Architecture, tech choices, scope"
+    quorum: 4
+    threshold: "two_thirds"
+    timeout_seconds: 300
+    tie_breaker: "revote_narrowed"
+
+  critical:
+    description: "Breaking changes, security, data model"
+    quorum: 6  # All members
+    threshold: "unanimous"
+    timeout_seconds: 600
+    max_rounds: 3
+    escalation: "safer_option"
+
+# Loop configurations
+loops:
+  test_fix:
+    max_iterations: 10
+    on_max_reached: "escalate_to_vote"
+
+  feature_evolution:
+    proposals_per_role: 2
+    selection_vote_type: "standard"
+    max_selected: 2
+
+# File paths
+paths:
+  history: ".ai-team/team-history.md"
+  decisions: ".ai-team/decisions/"
+  retrospectives: ".ai-team/retrospectives/"
+  proposals: ".ai-team/feature-proposals/"
+  specs: "specs/features/"
+  docs_uxui: "docs/UXUI/"
+
+# Quality gates
+quality_gates:
+  pre_commit:
+    - tests_pass
+    - no_lint_errors
+    - no_security_vulnerabilities
+    - coverage_maintained
+
+  pre_release:
+    - full_regression
+    - security_scan
+    - performance_benchmarks
+    - api_contracts_valid
+    - documentation_updated
+    - history_updated
+
+# CLI preferences
+cli:
+  prefer_cli_over_console: true
+  cloud_provider: "gcloud"  # gcloud | firebase | aws
+  package_manager: "npm"    # npm | yarn | pnpm | pip
+
+# Workflow settings
+workflow:
+  always_read_history_first: true
+  always_read_spec_before_task: true
+  always_create_wireframe_before_impl: true
+  always_update_history_after_task: true
+  require_qa_signoff: true
+  auto_propose_features_on_complete: true
+
+# Human interaction (Batched Questions Protocol)
+human_interaction:
+  mode: "batched"  # batched | never | always
+  
+  batching:
+    minimum_batch_size: 3           # Collect at least N questions before asking
+    max_hold_time: "end_of_phase"   # Don't hold longer than this
+    blocking_exception: true         # Allow immediate ask if truly blocking
+    
+  question_categories:
+    require_human:                   # MUST ask human
+      - spec_ambiguity
+      - business_logic
+      - priority_decisions
+      - user_preferences
+      - external_dependencies
+      - budget_resources
+    
+    team_decides:                    # Team votes, don't ask human
+      - technical_implementation
+      - code_architecture
+      - testing_strategy
+      - internal_workflow
+      - bug_fix_approach
+  
+  presentation:
+    single_message: true             # All questions in ONE interaction
+    include_context: true            # Explain why asking
+    show_team_leaning: true          # Share team's preference if any
+    structured_response: true        # Request parseable answer format
+  
+  post_answer:
+    record_in_history: true          # Log answers in team-history.md
+    update_affected_docs: true       # Update spec/plan if needed
+    never_re_ask: true               # Don't ask same question twice
