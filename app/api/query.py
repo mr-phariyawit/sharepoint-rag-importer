@@ -357,22 +357,45 @@ async def rag_query(request: QueryRequest, req: Request, current_user: User = De
     query_embedding = await embedder.embed_text(request.query)
     timing["embedding_ms"] = (time.time() - start) * 1000
     
-    # Build filters dict from SearchFilters model
+    # Build filters dict from SearchFilters model (including date range)
     filters_dict = None
     if request.filters:
         filters_dict = {
             "file_types": request.filters.file_types,
             "folder_path": request.filters.folder_path,
+            "date_from": request.filters.date_from,
+            "date_to": request.filters.date_to,
         }
-    
-    # 2. Search vector store
+
+    # 2. Search vector store based on mode
     start = time.time()
-    results = await vector_store.search(
-        query_embedding=query_embedding,
-        top_k=request.top_k,
-        connection_id=request.connection_id,
-        filters=filters_dict
-    )
+
+    if request.mode == SearchMode.HYBRID:
+        # Hybrid: combine semantic + keyword using RRF
+        results = await vector_store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text=request.query,
+            top_k=request.top_k,
+            connection_id=request.connection_id,
+            filters=filters_dict
+        )
+    elif request.mode == SearchMode.KEYWORD:
+        # Keyword-only search
+        results = await vector_store.keyword_search(
+            query_text=request.query,
+            top_k=request.top_k,
+            connection_id=request.connection_id,
+            filters=filters_dict
+        )
+    else:
+        # Default: semantic search
+        results = await vector_store.search(
+            query_embedding=query_embedding,
+            top_k=request.top_k,
+            connection_id=request.connection_id,
+            filters=filters_dict
+        )
+
     timing["retrieval_ms"] = (time.time() - start) * 1000
     
     if not results:
@@ -455,7 +478,8 @@ async def rag_query(request: QueryRequest, req: Request, current_user: User = De
         query=request.query,
         answer=answer,
         sources=cited_sources if request.include_sources else [],
-        timing=timing
+        timing=timing,
+        mode=request.mode.value
     )
 
 
@@ -463,34 +487,54 @@ async def rag_query(request: QueryRequest, req: Request, current_user: User = De
 async def semantic_search(request: SearchRequest, req: Request, current_user: User = Depends(require_auth)):
     """
     Search for relevant chunks.
-    
+
     Supports multiple modes:
-    - semantic: Vector similarity search
-    - keyword: Keyword matching (coming soon)
-    - hybrid: Combined approach (coming soon)
+    - semantic: Vector similarity search (default)
+    - keyword: Full-text keyword matching
+    - hybrid: Combined semantic + keyword using Reciprocal Rank Fusion
     """
     vector_store = req.app.state.vector_store
     embedder = TextEmbedder()
-    
-    # Build filters dict from SearchFilters model
+
+    # Build filters dict from SearchFilters model (including date range)
     filters_dict = None
     if request.filters:
         filters_dict = {
             "file_types": request.filters.file_types,
             "folder_path": request.filters.folder_path,
+            "date_from": request.filters.date_from,
+            "date_to": request.filters.date_to,
         }
-    
-    # Embed query
-    query_embedding = await embedder.embed_text(request.query)
-    
-    # Search with filters
-    results = await vector_store.search(
-        query_embedding=query_embedding,
-        top_k=request.top_k,
-        connection_id=request.connection_id,
-        filters=filters_dict
-    )
-    
+
+    # Search based on mode
+    if request.mode == SearchMode.HYBRID:
+        # Hybrid needs both embedding and text
+        query_embedding = await embedder.embed_text(request.query)
+        results = await vector_store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text=request.query,
+            top_k=request.top_k,
+            connection_id=request.connection_id,
+            filters=filters_dict
+        )
+    elif request.mode == SearchMode.KEYWORD:
+        # Keyword search doesn't need embedding
+        results = await vector_store.keyword_search(
+            query_text=request.query,
+            top_k=request.top_k,
+            connection_id=request.connection_id,
+            filters=filters_dict
+        )
+    else:
+        # Semantic search (default)
+        query_embedding = await embedder.embed_text(request.query)
+        results = await vector_store.search(
+            query_embedding=query_embedding,
+            top_k=request.top_k,
+            connection_id=request.connection_id,
+            filters=filters_dict
+        )
+
     return [
         SearchResult(
             chunk_id=r.id,

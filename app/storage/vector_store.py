@@ -102,9 +102,25 @@ class VectorStore:
                 field_name="metadata.mime_type",
                 field_schema=models.PayloadSchemaType.KEYWORD
             )
-            # Note: DATETIME schema requires newer client/server compatibility
-            # Skipping indexed_at index for now to ensure stability with current library versions
-            
+            # Text index for keyword/full-text search on content
+            await self._client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="content",
+                field_schema=models.TextIndexParams(
+                    type="text",
+                    tokenizer=models.TokenizerType.WORD,
+                    min_token_len=2,
+                    max_token_len=20,
+                    lowercase=True
+                )
+            )
+            # Index for date filtering
+            await self._client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="indexed_at",
+                field_schema=models.PayloadSchemaType.DATETIME
+            )
+
             logger.info(f"Created collection: {self.collection_name}")
         else:
             logger.info(f"Collection exists: {self.collection_name}")
@@ -135,6 +151,8 @@ class VectorStore:
         """
         points = []
         
+        from datetime import datetime
+
         for vec in vectors:
             point = PointStruct(
                 id=vec.get("id") or str(uuid.uuid4()),
@@ -148,7 +166,8 @@ class VectorStore:
                     "page_number": vec.get("page_number"),
                     "section_title": vec.get("section_title"),
                     "web_url": vec.get("web_url"),
-                    "metadata": vec.get("metadata", {})
+                    "metadata": vec.get("metadata", {}),
+                    "indexed_at": vec.get("indexed_at") or datetime.utcnow().isoformat()
                 }
             )
             points.append(point)
@@ -304,7 +323,22 @@ class VectorStore:
                         match=models.MatchText(text=filters["folder_path"])
                     )
                 )
-        
+
+            # Date range filtering
+            if filters.get("date_from") or filters.get("date_to"):
+                date_range = {}
+                if filters.get("date_from"):
+                    date_range["gte"] = filters["date_from"].isoformat() if hasattr(filters["date_from"], 'isoformat') else filters["date_from"]
+                if filters.get("date_to"):
+                    date_range["lte"] = filters["date_to"].isoformat() if hasattr(filters["date_to"], 'isoformat') else filters["date_to"]
+
+                filter_conditions.append(
+                    FieldCondition(
+                        key="indexed_at",
+                        range=Range(**date_range)
+                    )
+                )
+
         search_filter = Filter(must=filter_conditions) if filter_conditions else None
 
         # Search using query_points (qdrant-client >= 1.7)
@@ -336,7 +370,212 @@ class VectorStore:
             ))
         
         return search_results
-    
+
+    async def keyword_search(
+        self,
+        query_text: str,
+        top_k: int = 10,
+        connection_id: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[VectorSearchResult]:
+        """
+        Keyword/full-text search using Qdrant's text matching.
+
+        Args:
+            query_text: Search query text
+            top_k: Number of results
+            connection_id: Filter by connection
+            filters: Advanced filters
+
+        Returns:
+            List of search results with BM25-style relevance
+        """
+        # Build filter conditions
+        filter_conditions = []
+
+        # Text match on content (keyword search)
+        filter_conditions.append(
+            FieldCondition(
+                key="content",
+                match=models.MatchText(text=query_text)
+            )
+        )
+
+        if connection_id:
+            filter_conditions.append(
+                FieldCondition(
+                    key="connection_id",
+                    match=MatchValue(value=connection_id)
+                )
+            )
+
+        # Apply advanced filters
+        if filters:
+            if filters.get("file_types"):
+                file_type_conditions = []
+                for ext in filters["file_types"]:
+                    file_type_conditions.append(
+                        FieldCondition(
+                            key="document_name",
+                            match=models.MatchText(text=f".{ext}")
+                        )
+                    )
+                if file_type_conditions:
+                    filter_conditions.append(
+                        models.Filter(should=file_type_conditions)
+                    )
+
+            if filters.get("folder_path"):
+                filter_conditions.append(
+                    FieldCondition(
+                        key="metadata.path",
+                        match=models.MatchText(text=filters["folder_path"])
+                    )
+                )
+
+            # Date range filtering
+            if filters.get("date_from") or filters.get("date_to"):
+                date_range = {}
+                if filters.get("date_from"):
+                    date_range["gte"] = filters["date_from"].isoformat() if hasattr(filters["date_from"], 'isoformat') else filters["date_from"]
+                if filters.get("date_to"):
+                    date_range["lte"] = filters["date_to"].isoformat() if hasattr(filters["date_to"], 'isoformat') else filters["date_to"]
+
+                filter_conditions.append(
+                    FieldCondition(
+                        key="indexed_at",
+                        range=Range(**date_range)
+                    )
+                )
+
+        search_filter = Filter(must=filter_conditions)
+
+        # Scroll through matching documents (keyword search doesn't use vectors)
+        results = await self._client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=search_filter,
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        # Convert to results with pseudo-scores based on position
+        search_results = []
+        for idx, point in enumerate(results[0]):
+            payload = point.payload or {}
+            # Assign decreasing score based on match order
+            score = 1.0 - (idx * 0.05)  # Simple ranking score
+            search_results.append(VectorSearchResult(
+                id=str(point.id),
+                score=max(0.1, score),
+                content=payload.get("content", ""),
+                document_id=payload.get("document_id", ""),
+                document_name=payload.get("document_name", ""),
+                chunk_index=payload.get("chunk_index", 0),
+                page_number=payload.get("page_number"),
+                section_title=payload.get("section_title"),
+                web_url=payload.get("web_url"),
+                metadata=payload.get("metadata", {})
+            ))
+
+        return search_results
+
+    async def hybrid_search(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        top_k: int = 10,
+        connection_id: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        semantic_weight: float = 0.7,
+        keyword_weight: float = 0.3
+    ) -> List[VectorSearchResult]:
+        """
+        Hybrid search combining semantic and keyword search using
+        Reciprocal Rank Fusion (RRF).
+
+        Args:
+            query_embedding: Query vector for semantic search
+            query_text: Query text for keyword search
+            top_k: Final number of results
+            connection_id: Filter by connection
+            filters: Advanced filters
+            semantic_weight: Weight for semantic results (default 0.7)
+            keyword_weight: Weight for keyword results (default 0.3)
+
+        Returns:
+            List of fused search results
+        """
+        import asyncio
+
+        # Fetch more results for fusion
+        fetch_k = min(top_k * 3, 50)
+
+        # Run both searches in parallel
+        semantic_task = self.search(
+            query_embedding=query_embedding,
+            top_k=fetch_k,
+            connection_id=connection_id,
+            filters=filters
+        )
+
+        keyword_task = self.keyword_search(
+            query_text=query_text,
+            top_k=fetch_k,
+            connection_id=connection_id,
+            filters=filters
+        )
+
+        semantic_results, keyword_results = await asyncio.gather(
+            semantic_task, keyword_task
+        )
+
+        # Reciprocal Rank Fusion (RRF)
+        # Score = sum(1 / (k + rank)) for each result list
+        k = 60  # RRF constant
+
+        # Build score map: id -> (rrf_score, result)
+        score_map: Dict[str, tuple] = {}
+
+        # Process semantic results
+        for rank, result in enumerate(semantic_results, 1):
+            rrf_score = semantic_weight * (1.0 / (k + rank))
+            if result.id in score_map:
+                existing_score, existing_result = score_map[result.id]
+                score_map[result.id] = (existing_score + rrf_score, existing_result)
+            else:
+                score_map[result.id] = (rrf_score, result)
+
+        # Process keyword results
+        for rank, result in enumerate(keyword_results, 1):
+            rrf_score = keyword_weight * (1.0 / (k + rank))
+            if result.id in score_map:
+                existing_score, existing_result = score_map[result.id]
+                score_map[result.id] = (existing_score + rrf_score, existing_result)
+            else:
+                score_map[result.id] = (rrf_score, result)
+
+        # Sort by fused score
+        sorted_results = sorted(
+            score_map.values(),
+            key=lambda x: x[0],
+            reverse=True
+        )
+
+        # Return top_k with updated scores
+        final_results = []
+        for fused_score, result in sorted_results[:top_k]:
+            # Update score to the fused score (normalized)
+            result.score = fused_score
+            final_results.append(result)
+
+        logger.info(
+            f"Hybrid search: {len(semantic_results)} semantic + "
+            f"{len(keyword_results)} keyword -> {len(final_results)} fused"
+        )
+
+        return final_results
+
     async def delete_by_document(self, document_id: str) -> int:
         """Delete all vectors for a document"""
         result = await self._client.delete(
